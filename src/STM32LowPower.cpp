@@ -93,10 +93,12 @@ void STM32LowPower::sleep(uint32_t ms)
   */
 void STM32LowPower::deepSleep(uint32_t ms)
 {
+	extern __IO uint32_t uwTick;
   if ((ms != 0) || _rtc_wakeup) {
     programRtcWakeUp(ms, DEEP_SLEEP_MODE);
   }
   LowPower_stop(_serial);
+	uwTick += ms;
 }
 
 /**

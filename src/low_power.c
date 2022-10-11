@@ -20,7 +20,7 @@
 
 #include "Arduino.h"
 #include "low_power.h"
-#include "stm32yyxx_ll_pwr.h"
+#include "stm32l0xx_ll_pwr.h"
 
 #if defined(STM32_CORE_VERSION) && (STM32_CORE_VERSION  > 0x01090000) \
  && defined(HAL_PWR_MODULE_ENABLED) && !defined(HAL_PWR_MODULE_ONLY)
@@ -40,7 +40,64 @@ static UART_HandleTypeDef *WakeUpUart = NULL;
 #endif
 /* Save callback pointer */
 static void (*WakeUpUartCb)(void) = NULL;
+static void init_gpio(void)
+{
+    // Configure all GPIOs as analog to reduce power consumption by unused ports
+    __GPIOA_CLK_ENABLE();
+    __GPIOB_CLK_ENABLE();
+    __GPIOC_CLK_ENABLE();
+    __GPIOH_CLK_ENABLE();
 
+    // gpio.Mode = GPIO_MODE_ANALOG;
+    // gpio.Pull = GPIO_NOPULL;
+    // /* All GPIOs except debug pins (SWCLK and SWD) */
+    // gpio.Pin = GPIO_PIN_All & (~(GPIO_PIN_13 | GPIO_PIN_14));
+    // HAL_GPIO_Init(GPIOA, &gpio);
+
+    GPIOA->PUPDR   = 0x24002040;
+    GPIOA->AFR[0]  = 0x00006600;
+    GPIOA->AFR[1]  = 0x00000040;
+    GPIOA->OTYPER  = 0x00000000;
+    GPIOA->OSPEEDR = 0xcc0cc0f0;
+    GPIOA->ODR     = 0x00008000;
+    GPIOA->MODER   = 0x69fbafaf;
+
+    // /* All other GPIOs */
+    // gpio.Pin = GPIO_PIN_All;
+    // HAL_GPIO_Init(GPIOB, &gpio);
+    // HAL_GPIO_Init(GPIOC, &gpio);
+    // HAL_GPIO_Init(GPIOH, &gpio);
+
+    GPIOB->PUPDR   = 0x00000000;
+    GPIOB->AFR[0]  = 0x00000000;
+    GPIOB->AFR[1]  = 0x00000000;
+    GPIOB->OTYPER  = 0x00000000;
+    GPIOB->OSPEEDR = 0x000000c0;
+    GPIOB->ODR     = 0x00000000;
+    GPIOB->MODER   = 0xffffffbf;
+
+    GPIOC->PUPDR   = 0x00000000;
+    GPIOC->AFR[0]  = 0x00000000;
+    GPIOC->AFR[1]  = 0x00000000;
+    GPIOC->OTYPER  = 0x00000000;
+    GPIOC->OSPEEDR = 0x00000000;
+    GPIOC->ODR     = 0x00000000;
+    GPIOC->MODER   = 0xffffffd5;
+
+    GPIOH->PUPDR   = 0x00000000;
+    GPIOH->AFR[0]  = 0x00000000;
+    GPIOH->AFR[1]  = 0x00000000;
+    GPIOH->OTYPER  = 0x00000000;
+    GPIOH->OSPEEDR = 0x00000000;
+    GPIOH->ODR     = 0x00000000;
+    GPIOH->MODER   = 0x003c000f;
+
+    // Disable all GPIO clocks again
+    __GPIOA_CLK_DISABLE();
+    __GPIOB_CLK_DISABLE();
+    __GPIOC_CLK_DISABLE();
+    __GPIOH_CLK_DISABLE();
+}
 #if defined(PWR_FLAG_WUF)
 #define PWR_FLAG_WU PWR_FLAG_WUF
 #elif defined(PWR_WAKEUP_ALL_FLAG)
@@ -57,6 +114,7 @@ static void (*WakeUpUartCb)(void) = NULL;
   */
 void LowPower_init()
 {
+	init_gpio();
 #if defined(__HAL_RCC_PWR_CLK_ENABLE)
   /* Enable Power Clock */
   __HAL_RCC_PWR_CLK_ENABLE();
@@ -428,7 +486,13 @@ void LowPower_sleep(uint32_t regulator)
   */
 void LowPower_stop(serial_t *obj)
 {
-  __disable_irq();
+  /*
+   * Suspend Tick increment to prevent wakeup by Systick interrupt.
+   * Otherwise the Systick interrupt will wake up the device within
+   * 1ms (HAL time base)
+   */
+  HAL_SuspendTick();
+//  __disable_irq();
 
 #if defined(UART_WKUP_SUPPORT)
   if (WakeUpUart != NULL) {
@@ -437,7 +501,7 @@ void LowPower_stop(serial_t *obj)
 #endif
 
 #if defined(PWR_CR_ULP)
-  /* Enable Ultra low power mode */
+  /* Enable Ultra low power mode !*/
   HAL_PWREx_EnableUltraLowPower();
 #endif
 #if defined(PWR_CR1_ULPMEN) || defined(PWR_CR3_ULPMEN)
@@ -445,12 +509,12 @@ void LowPower_stop(serial_t *obj)
   HAL_PWREx_EnableUltraLowPowerMode();
 #endif
 #if defined(PWR_CR_FWU)
-  /* Enable the fast wake up from Ultra low power mode */
+  /* Enable the fast wake up from Ultra low power mode !*/
   HAL_PWREx_EnableFastWakeUp();
 #endif
 #ifdef __HAL_RCC_WAKEUPSTOP_CLK_CONFIG
   /* Select MSI or HSI as system clock source after Wake Up from Stop mode */
-#ifdef RCC_STOP_WAKEUPCLOCK_MSI
+#ifdef RCC_STOP_WAKEUPCLOCK_MSI /* !*/
   __HAL_RCC_WAKEUPSTOP_CLK_CONFIG(RCC_STOP_WAKEUPCLOCK_MSI);
 #else
   __HAL_RCC_WAKEUPSTOP_CLK_CONFIG(RCC_STOP_WAKEUPCLOCK_HSI);
@@ -475,6 +539,7 @@ void LowPower_stop(serial_t *obj)
     HAL_PWREx_EnterSTOP2Mode(PWR_STOPENTRY_WFI);
   } else
 #endif
+
   {
     HAL_PWR_EnterSTOPMode(PWR_LOWPOWERREGULATOR_ON, PWR_STOPENTRY_WFI);
   }
@@ -490,9 +555,12 @@ void LowPower_stop(serial_t *obj)
 #else
   UNUSED(obj);
 #endif
-  __enable_irq();
+  //__enable_irq();
 
-  HAL_Delay(10);
+  //HAL_Delay(10);
+
+  /* Resume Tick interrupt if disabled prior to SLEEP mode entry */
+  HAL_ResumeTick();
 
   if (WakeUpUartCb != NULL) {
     WakeUpUartCb();
@@ -611,8 +679,108 @@ void LowPower_EnableWakeUpUart(serial_t *serial, void (*FuncPtr)(void))
   */
 WEAK void SystemClock_ConfigFromStop(void)
 {
+/*
   configIPClock();
   SystemClock_Config();
+*/
+  RCC_OscInitTypeDef RCC_OscInitStruct = { 0 };
+  RCC_ClkInitTypeDef RCC_ClkInitStruct = { 0 };
+  RCC_PeriphCLKInitTypeDef PeriphClkInit = { 0 };
+#if 0	/* Move clock setting code to usbd_conf.c */
+  RCC_CRSInitTypeDef RCC_CRSInitStruct = { 0 };
+#endif
+
+    /**Configure the main internal regulator output voltage
+    */
+  __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE1);
+
+    /**Initializes the CPU, AHB and APB busses clocks
+    */
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_LSE|
+#ifdef USBCON
+                                     RCC_OSCILLATORTYPE_HSI48|
+#endif
+#if CATENA_CFG_SYSCLK < 16
+                                     RCC_OSCILLATORTYPE_MSI;
+#else
+                                     RCC_OSCILLATORTYPE_HSI;
+#endif
+
+  RCC_OscInitStruct.LSEState = RCC_LSE_ON;
+#if CATENA_CFG_SYSCLK < 16
+  RCC_OscInitStruct.MSIState = RCC_MSI_ON;
+  RCC_OscInitStruct.MSICalibrationValue = 2;
+# if CATENA_CFG_SYSCLK == 2
+  RCC_OscInitStruct.MSIClockRange = RCC_MSIRANGE_5;
+# else	/* CATENA_CFG_SYSCLK == 4 */
+  RCC_OscInitStruct.MSIClockRange = RCC_MSIRANGE_6;
+# endif	/* CATENA_CFG_SYSCLK == 2 */
+  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_NONE;
+
+#else	/* CATENA_CFG_SYSCLK >= 16 */
+
+  RCC_OscInitStruct.HSIState = RCC_HSI_ON;
+  RCC_OscInitStruct.HSICalibrationValue = 18;
+# ifdef USBCON
+  RCC_OscInitStruct.HSI48State = RCC_HSI48_ON;
+# endif
+# if CATENA_CFG_SYSCLK == 16
+  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_NONE;
+# else	/* CATENA_CFG_SYSCLK != 16 */
+  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
+  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI;
+#  if CATENA_CFG_SYSCLK == 24
+  RCC_OscInitStruct.PLL.PLLMUL = RCC_PLLMUL_3;	/* SYSCLK == 24Mhz */
+#  else	/* CATENA_CFG_SYSCLK == 32 */
+  RCC_OscInitStruct.PLL.PLLMUL = RCC_PLLMUL_4;	/* SYSCLK == 32Mhz */
+#  endif
+  RCC_OscInitStruct.PLL.PLLDIV = RCC_PLLDIV_2;
+# endif
+#endif
+  HAL_RCC_OscConfig(&RCC_OscInitStruct);
+
+    /**Initializes the CPU, AHB and APB busses clocks
+    */
+  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
+                              |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
+#if CATENA_CFG_SYSCLK < 16
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_MSI;
+  RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
+#elif CATENA_CFG_SYSCLK == 16
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_HSI;
+  RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
+#else
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
+  RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
+/*  RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV2;	HCLK = SYSCLK / 2 */
+#endif
+  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV1;
+  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
+//  TESTCB;
+
+#if CATENA_CFG_SYSCLK < 24
+  HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_0);
+#else
+  HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_1);
+#endif
+
+#if CATENA_CFG_SYSCLK < 16
+  LL_RCC_SetClkAfterWakeFromStop(LL_RCC_STOP_WAKEUPCLOCK_MSI);
+#else
+  LL_RCC_SetClkAfterWakeFromStop(LL_RCC_STOP_WAKEUPCLOCK_HSI);
+#endif
+    /**Configure the Systick interrupt time
+    */
+  HAL_SYSTICK_Config(HAL_RCC_GetHCLKFreq()/1000);
+
+    /**Configure the Systick
+    */
+  HAL_SYSTICK_CLKSourceConfig(SYSTICK_CLKSOURCE_HCLK);
+
+  /* SysTick_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(SysTick_IRQn, 0, 0);
+	HAL_PWREx_DisableFastWakeUp();
+	HAL_PWREx_DisableUltraLowPower();
 }
 
 #ifdef __cplusplus
